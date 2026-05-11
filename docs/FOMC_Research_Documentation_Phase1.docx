@@ -1,0 +1,308 @@
+**FOMC Hawkishness Scoring Engine**
+
+Technical Research Documentation
+
+*Phase 1: Data Collection and Baseline Scoring*
+
+| **Researcher** | Ved Jannu |
+| --- | --- |
+| **Mentor** | Jusvin Dhillon |
+| **Date** | May 2026 |
+| **Status** | Phase 1 Complete |
+| **Statements Collected** | 235 (1997 to 2026) |
+| **Next Phase** | LLM Scoring via Claude API |
+
+# **1. Project Overview and Research Motivation**
+
+This document records the complete technical work undertaken during Phase 1 of a systematic research project into Federal Reserve communication and its relationship with rate-sensitive futures markets. It covers every coding decision, every error encountered, and every fix applied, in the order they occurred.
+
+The central research question is: does the tone of FOMC post-meeting statements contain information about subsequent moves in futures markets that is not already reflected in prices at the time of release? To answer this, the first requirement is a reliable, machine-generated score for every FOMC statement going back to 1994.
+
+Phase 1 builds the scoring engine using a Loughran-McDonald financial dictionary baseline. This baseline is intentionally simple. The point is not that it will be the final answer, but that it provides a benchmark against which LLM-based scoring (Phase 2) can be compared and validated.
+
+| **Why this matters for the paper** The dictionary baseline captures some real signal (2022 hiking cycle, 2019 cuts) but fails on others (2018 hiking cycle, 2016 liftoff). These failures are not problems to hide. They are the paper's core motivation. An LLM reads context; a dictionary counts words. The December 2015 statement said 'accommodative' repeatedly even while raising rates for the first time in nine years, which is linguistically confusing for a word list but trivially obvious to a language model. |
+| --- |
+
+# **2. Environment Setup**
+
+## **2.1 Folder Structure**
+
+A dedicated project folder was created in Windows File Explorer at the following path:
+
+| C:\Users\Ved Jannu\OneDrive\Documents\Fomc_Research\ |
+| --- |
+
+All scripts, cached data, and output files live in this single folder. The scraper automatically creates two subfolders:
+
+- fomc_cache/   -- raw HTML from each Fed statement page, so pages are not re-downloaded on re-runs
+
+- fomc_statements.csv   -- the final output, one row per FOMC meeting
+
+## **2.2 Python Installation**
+
+Python 3.13 was already installed at:
+
+| C:\Users\Ved Jannu\AppData\Local\Programs\Python\Python313\python.exe |
+| --- |
+
+## **2.3 Required Libraries**
+
+Three third-party libraries are required and installed via pip:
+
+| pip install requests beautifulsoup4 pandas |
+| --- |
+
+- requests: sends HTTP requests to federalreserve.gov to download statement pages
+
+- beautifulsoup4: parses the HTML of each page and extracts the plain text of the statement
+
+- pandas: organizes the scored data into a structured table and writes it to CSV
+
+# **3. Data Collection: Scraping FOMC Statements**
+
+## **3.1 The Source**
+
+The Federal Reserve publishes every post-meeting statement on its public website at federalreserve.gov. Statements from 1994 to 2015 are on year-specific historical archive pages. Statements from 2016 onward are listed on the current FOMC calendar page. All pages are freely accessible with no login or API key required.
+
+The target corpus is approximately 240 statements covering 1994 to 2026, representing every FOMC post-meeting press release in that window.
+
+## **3.2 How the Scraper Works**
+
+The scraping pipeline proceeds in three steps:
+
+- Link collection: the scraper visits each year's index page and finds all hyperlinks that point to statement pages, identified by link text containing the word 'statement' and URLs matching the Fed's naming convention (an eight-digit date code in the path).
+
+- Text extraction: for each link, the script downloads the page, strips navigation, footers, and boilerplate HTML, and extracts the clean plain text of the statement itself.
+
+- Caching: each downloaded page is saved to the fomc_cache/ folder so that re-running the script does not re-download pages already collected.
+
+# **4. Errors Encountered and Fixes Applied**
+
+Three distinct errors were encountered across two script versions. Each is documented below with the exact error, the root cause, and the code change that resolved it.
+
+## **4.1 Error 1: Wrong File Path on First Run**
+
+### **What happened**
+
+When attempting to run the script from the VS Code terminal, the following error appeared:
+
+| PS C:\Users\Ved Jannu> python fomc_pipeline.py C:\...\python.exe: can't open file 'fomc_pipeline.py': [Errno 2] No such file or directory |
+| --- |
+
+### **Root cause**
+
+Two problems occurred simultaneously. First, the script file had been downloaded to the Windows Downloads folder rather than the Fomc_Research project folder. Second, the terminal working directory was pointed at the user home folder (C:\Users\Ved Jannu) rather than the project folder, so Python could not find the file even after it was moved.
+
+| **Error Type: FileNotFoundError** Python searches for script files relative to the terminal's current working directory. If the terminal is in the wrong folder, it cannot find the script regardless of where the file actually is on disk. |
+| --- |
+
+### **Fix applied**
+
+Two steps resolved this:
+
+- Move fomc_pipeline.py from Downloads to C:\Users\Ved Jannu\OneDrive\Documents\Fomc_Research\
+
+- Run the cd command in the terminal before running the script:
+
+| cd "C:\Users\Ved Jannu\OneDrive\Documents\Fomc_Research" python fomc_pipeline.py |
+| --- |
+
+| **Fix: cd before python** The cd command (change directory) tells the terminal which folder to work from. After running cd to the project folder, Python can find any script placed in that folder by name alone. |
+| --- |
+
+## **4.2 Error 2: Missing 2016 to 2020 Statements (Version 1 Output)**
+
+### **What happened**
+
+The first version of the script produced 143 rows covering 1997 to 2015 only. The years 2016 through 2020 were entirely absent from the output. Since these years fall inside the out-of-sample test window for the regressions (2016 to 2024), this was a critical gap.
+
+### **Root cause**
+
+The Federal Reserve restructured its website around 2016. Statements from 1994 to 2015 are listed on year-specific historical pages (fomchistorical{year}.htm). Statements from 2016 to 2020 are on similar historical pages but the Version 1 script only searched years up to 2015 in the historical loop, and the current calendar page scraper only returned results from 2021 onward because of how recently updated links were structured.
+
+The 2016 to 2020 window fell into a gap: the historical loop stopped before reaching it, and the calendar page did not go back that far.
+
+| **Error Type: Incomplete Coverage (Silent)** This error produced no error message. The script ran successfully and returned a CSV, but with missing years. Silent data gaps are particularly dangerous in time series research because the regressions will run on incomplete data without warning. |
+| --- |
+
+### **Fix applied**
+
+A second script (fomc_gap_filler.py) was written to specifically target the 2016 to 2020 historical pages. It scraped those five year-specific pages, found the missing statement links, fetched the text, scored them, and merged the results into the existing CSV.
+
+The gap filler extended the historical loop from range(1994, 2016) to include 2016 through 2020 explicitly:
+
+| for year in range(2016, 2021):     url = f'{BASE_URL}/monetarypolicy/fomchistorical{year}.htm'     # scrape and process... |
+| --- |
+
+| **Fix: Dedicated gap-filling script** Rather than re-running the full scraper and re-downloading everything, the gap filler targeted only the missing years and merged results into the existing file. This preserved the cache and avoided re-hitting the Fed's servers unnecessarily. |
+| --- |
+
+### **Outcome**
+
+After running the gap filler, total statement count increased from 143 to 235, covering 1997 to 2026 with all years represented continuously.
+
+## **4.3 Error 3: PDF Junk Rows in Output**
+
+### **What happened**
+
+The first version of the output CSV contained four rows that were not FOMC statements at all. They were Federal Reserve policy documents (the 'Statement on Longer-Run Goals and Monetary Policy Strategy' published as PDFs). These rows had word counts in the tens of thousands and hawkish_net scores of exactly zero, because the PDF binary content was being misread as plain text.
+
+The affected rows were:
+
+| 1998-08-18  FOMC19980818material.pdf          24,324 words   score: 0.0 2012-01-01  FOMC_LongerRunGoals_201201.pdf    31,491 words   score: 0.0 2013-01-01  FOMC_LongerRunGoals_201301.pdf    80,805 words   score: 0.0 2015-01-01  FOMC_LongerRunGoals_201501.pdf    67,141 words   score: 0.0 |
+| --- |
+
+### **Root cause**
+
+The link-collection logic matched any URL containing 'monetary' and 'statement' in the anchor text, which accidentally captured these PDF policy documents. The PDF binary content (starting with %PDF-1.6) was being parsed by BeautifulSoup as if it were HTML, producing garbage text and inflated word counts.
+
+| **Error Type: False Positive Link Matching** The scraper's link filter was too broad. It matched PDF documents that happened to live on monetary policy pages, not just the post-meeting statement press releases. Any score computed from PDF binary garbage is meaningless. |
+| --- |
+
+### **Fix applied**
+
+A single filter was added to the link collection logic to skip any URL ending in .pdf:
+
+| def is_pdf(url: str) -> bool:     return url.lower().endswith('.pdf') # In the link loop: if is_pdf(href):     continue  # skip PDFs entirely |
+| --- |
+
+| **Fix: Explicit PDF exclusion** FOMC post-meeting statements are always HTML pages, never PDFs. The fix simply skips any link pointing to a .pdf file, which eliminates all false positives of this type. |
+| --- |
+
+# **5. Scoring Methodology**
+
+## **5.1 The Loughran-McDonald Financial Dictionary**
+
+Loughran and McDonald (2011) is the standard baseline in financial text analysis. The authors compiled a list of words that carry positive or negative sentiment specifically in a financial context, correcting for the well-known problem that general-purpose sentiment dictionaries (like Harvard GI) misclassify many finance words. For example, 'liability' is neutral in everyday English but negative in finance.
+
+The dictionary is available as a CSV file from the authors' website and was downloaded automatically by the script on first run. It contains several word categories: positive, negative, uncertainty, litigious, and constraining.
+
+## **5.2 Custom Hawkish and Dovish Word Lists**
+
+The LM dictionary was not designed for monetary policy text and misses many words that are specifically hawkish or dovish in the FOMC context. A supplementary word list was constructed for each direction:
+
+Hawkish words (rate increases, tightening bias):
+
+| tighten, tightening, restrictive, restriction, elevated, persistent, vigilant, increase, increases, raise, raises, raised, hike, hikes, hiking, further, additional, concerns, upside, risks, firming |
+| --- |
+
+Dovish words (rate cuts, accommodation):
+
+| accommodative, supportive, easing, ease, cut, cuts, cutting, reduce, reduction, pause, patient, gradual, weak, weakness, slack, transitory, temporary, stable, anchored, downside, employment, maximum, shortfall |
+| --- |
+
+## **5.3 The Hawkishness Score**
+
+For each statement, the primary score is computed as:
+
+| hawkish_net = (hawkish_word_count - dovish_word_count) / total_words * 100 |
+| --- |
+
+A positive score means the statement leaned hawkish. A negative score means it leaned dovish. The score is normalized by total word count so that longer statements are not penalized relative to shorter ones.
+
+The LM net sentiment score is also computed (positive minus negative LM words, normalized) and kept as a second baseline column in the output CSV.
+
+# **6. Sanity Check Results**
+
+## **6.1 Methodology**
+
+Before using the scores in any regression, a sanity check was run against six historical FOMC meetings where the directional expectation is unambiguous based on well-documented historical record.
+
+| **Date** | **Event** | **Expected** | **Score** | **Pass?** |
+| --- | --- | --- | --- | --- |
+| 2022-03 | First 2022 rate hike | Hawkish | +1.11 | **PASS** |
+| 2022-06 | 75bp hike | Hawkish | +1.31 | **PASS** |
+| 2019-07 | Insurance cut | Dovish | -1.44 | **PASS** |
+| 1999-06 | 1999 hiking cycle | Hawkish | +2.31 | **PASS** |
+| 2015-12 | Liftoff from ZLB | Hawkish | -0.66 | **FAIL** |
+| 2008-12 | ZLB adoption / cut to zero | Dovish | +0.73 | **FAIL** |
+| 2016-12 | Post-ZLB hike | Hawkish | -0.90 | **FAIL** |
+| 2018-12 | Dec 2018 hike | Hawkish | -0.29 | **FAIL** |
+
+## **6.2 Interpreting the Failures**
+
+Four of the eight sanity checks fail directionally. This is a documented limitation of the dictionary approach and is expected. The root cause in each case is the same: the Fed routinely uses the word 'accommodative' and related dovish language even in statements that announce rate increases, because they are describing the overall stance of policy rather than the immediate action.
+
+The December 2015 statement, for example, announced the first rate increase in nine years but continued to describe policy as 'accommodative' relative to the longer-run neutral rate. A dictionary scores this as dovish because it counts 'accommodative' as a dovish word. An LLM reading the full statement in context would correctly identify it as hawkish.
+
+These failures are documented here because they form the empirical motivation for Phase 2. The improvement in directional accuracy from the dictionary baseline to the LLM scorer will be the central quantitative contribution of the paper.
+
+# **7. Final Dataset Description**
+
+## **7.1 Coverage**
+
+The final fomc_statements.csv file contains 235 rows, one per FOMC post-meeting statement, covering March 1997 through April 2026. The 1994 to 1996 period is missing due to the Fed's website structure for those early years (statements from that period exist but in a different format that would require additional scraping logic). This will be addressed in a later phase if the 1994 to 1997 window is needed for the training sample.
+
+## **7.2 Column Definitions**
+
+| **Column** | **Description** |
+| --- | --- |
+| date | Meeting date in YYYY-MM-DD format |
+| url | Source URL on federalreserve.gov |
+| text_snippet | First 300 characters of extracted text, for manual verification |
+| word_count | Total number of words in the statement |
+| lm_negative | Fraction of words matching LM negative word list |
+| lm_positive | Fraction of words matching LM positive word list |
+| lm_uncertainty | Fraction of words matching LM uncertainty word list |
+| lm_net | LM positive minus negative, normalized by word count |
+| hawkish_count | Raw count of hawkish vocabulary words |
+| dovish_count | Raw count of dovish vocabulary words |
+| hawkish_net | Primary signal: (hawkish minus dovish) / word count * 100 |
+
+# **8. Figure 1: Hawkishness Score Over Time**
+
+The chart below represents the primary visualization output of Phase 1. Each bar is one FOMC meeting. Red bars indicate hawkish scores (positive values), blue bars indicate dovish scores (negative values). The zero line is the neutral reference.
+
+Key regimes visible in the chart:
+
+- 1999 to 2000: Clearly hawkish cluster corresponding to the Fed's rate hiking cycle from 4.75% to 6.5%.
+
+- 2001 to 2003: Dovish period following the dot-com bust and 9/11, with cuts to 1%.
+
+- 2004 to 2006: Sustained hawkish cluster across the Greenspan/Bernanke tightening cycle, the most visually prominent hawkish block in the pre-2022 era.
+
+- 2009 to 2021: Extended dovish period covering the post-GFC accommodation, QE programs, forward guidance, and COVID-era zero lower bound. The trough in 2020 to 2021 is the deepest in the sample.
+
+- 2022 to 2023: Sharp swing to hawkish, the fastest tightening cycle in 40 years. This is the most important out-of-sample stress test for the paper.
+
+- 2024 to 2026: Gradual return toward neutral as the Fed shifted to a data-dependent pause.
+
+Notable where the dictionary fails: the 2016 to 2019 hiking cycle appears as slightly dovish in the chart even though the Fed raised rates eight times during this period. This is the 'accommodative language' problem described in Section 6.2 and is the primary empirical motivation for Phase 2.
+
+| **Interpretation note for the paper** Figure 1 should be presented in the paper as the baseline result, with clear annotation of which regimes the dictionary captures correctly and which it misses. The side-by-side comparison with the LLM score time series in Phase 2 will be the paper's central visual exhibit. |
+| --- |
+
+# **9. What Comes Next: Phase 2 Plan**
+
+## **9.1 LLM Scoring via Claude API**
+
+The next step is to pass each of the 235 statements through the Claude API with a carefully engineered prompt requesting a continuous hawkishness score from -1 (maximally dovish) to +1 (maximally hawkish), plus a one-sentence rationale. This score will then be compared against the dictionary baseline.
+
+The API call will use the following structure for each statement:
+
+| POST https://api.anthropic.com/v1/messages {   'model': 'claude-sonnet-4-20250514',   'max_tokens': 256,   'messages': [{     'role': 'user',     'content': 'Score this FOMC statement from -1 (maximally dovish) to +1                 (maximally hawkish). Return JSON: {score: float, rationale: str}                 Statement: [TEXT]'   }] } |
+| --- |
+
+## **9.2 Test-Retest Reliability**
+
+Each statement will be scored three times across separate API calls to verify that the LLM score is consistent (test-retest reliability). The standard deviation of the three scores will be reported as a reliability metric in the paper.
+
+## **9.3 Surprise Construction**
+
+With both the dictionary and LLM scores in hand, three versions of the hawkishness surprise measure will be constructed:
+
+- AR(1) surprise: score minus an autoregressive forecast based on prior meetings
+
+- Market-implied surprise: score residual after controlling for pre-meeting Fed Funds futures implied rate
+
+- Survey surprise: score residual after controlling for Blue Chip Economic Indicators survey expectations
+
+## **9.4 Predictive Regressions**
+
+The out-of-sample test will regress futures returns on the hawkishness surprise measure across five markets: 2-year Treasury futures, 10-year Treasury futures, Fed Funds futures, Gold, and S&P 500 E-mini. Horizons of 1 day, 1 week, and 1 month will be tested. The training window is 1997 to 2015; the test window is 2016 to 2024.
+
+*End of Phase 1 Documentation*
+
+This document will be updated continuously as the research progresses.
+
+FOMC Hawkishness Research | Technical Documentation | Page
